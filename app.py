@@ -63,6 +63,81 @@ def save_state(state: dict) -> None:
             os.unlink(temp_name)
 
 
+def generate_assistant_suggestions(state: dict, prompt: str = "") -> list[dict]:
+    tasks = state.get("tasks", [])
+    hosts = state.get("hosts", [])
+    agent_list = state.get("agents") or AGENTS
+    prompt_lower = prompt.lower().strip()
+    suggestions: list[dict] = []
+
+    def add(title: str, details: str, *, kind: str, prefill: dict | None = None) -> None:
+        suggestions.append({
+            "type": kind,
+            "title": title,
+            "details": details,
+            "prefill": prefill or {},
+        })
+
+    if any(term in prompt_lower for term in {"docker", "container", "status"}):
+        add(
+            "Controleer Docker-status",
+            "Laat de assistent de lokale containers en status ophalen zonder wijzigingen te doen.",
+            kind="docker",
+            prefill={},
+        )
+
+    if not tasks:
+        agent_id = agent_list[0]["id"] if agent_list else "morpheus"
+        add(
+            "Maak een eerste taak voor de operaties",
+            "Vult direct een bruikbare taak in met een agent en een korte beschrijving.",
+            kind="task",
+            prefill={"title": "Controleer de eerste systeemstatus en noteer de volgende actie", "agent_id": agent_id},
+        )
+
+    if not hosts:
+        add(
+            "Voeg een eerste SSH-host toe",
+            "Gebruik een alias of user@host om snel verbindingen te testen en in te vullen.",
+            kind="host",
+            prefill={"label": "prod-server", "address": "user@server.example"},
+        )
+
+    ssh_key_dir = Path.home() / ".ssh"
+    if not any(ssh_key_dir.glob("matrix-*")):
+        add(
+            "Genereer een SSH-sleutel",
+            "Maak een lokale ed25519-sleutel voor beveiligde toegang met een verplichte wachtzin.",
+            kind="key",
+            prefill={"label": "matrix-key"},
+        )
+
+    if "incident" in prompt_lower or "kritiek" in prompt_lower or "alarm" in prompt_lower or not tasks:
+        add(
+            "Plan een incidentcontrole",
+            "Gebruik Neo om een incident te prioriteren en de voortgang op te volgen.",
+            kind="task",
+            prefill={"title": "Prioriteer incident en controleer de eerste bron van gegevens", "agent_id": "neo"},
+        )
+
+    add(
+        "Controleer backup- en herstelstatus",
+        "Gebruik Cypher om de backup- en herstelplanning te valideren.",
+        kind="task",
+        prefill={"title": "Controleer backup-status en herstelplanning voor de belangrijkste services", "agent_id": "cypher"},
+    )
+
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for suggestion in suggestions:
+        key = suggestion["title"]
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(suggestion)
+    return unique[:5]
+
+
 def run_readonly(command: list[str], timeout: int = 6) -> dict:
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
@@ -120,7 +195,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/docker":
             version = run_readonly(["docker", "info", "--format", "{{.ServerVersion}}"])
             containers = run_readonly(["docker", "ps", "--format", "{{.Names}}\t{{.Status}}"])
-            self._json(200, {"available": version["ok"], "version": version["output"], "containers": containers["output"].splitlines() if containers["ok"] and containers["output"] else [], "message": "" if version["ok"] else version["output"]})
+            self._json(200, {"available": version["ok"], "version": version["output"], "containers": containers["output"].splitlines() if containers["ok"] and containers["output"] else [], "message": "Docker-status is alleen informatief en veilig. Er worden geen containers gewijzigd."})
         else:
             self._json(404, {"error": "Niet gevonden"})
 
@@ -132,7 +207,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = self._body()
             path = urlparse(self.path).path
             state = load_state()
-            if path == "/api/tasks":
+            if path == "/api/assistant":
+                prompt = str(payload.get("prompt", "")).strip()
+                self._json(200, {"prompt": prompt, "suggestions": generate_assistant_suggestions(state, prompt)})
+            elif path == "/api/tasks":
                 title = str(payload.get("title", "")).strip()[:160]
                 agent_id = str(payload.get("agent_id", ""))
                 if not title or agent_id not in {agent["id"] for agent in AGENTS}:
@@ -179,7 +257,7 @@ class Handler(BaseHTTPRequestHandler):
                 key_path = SSH_DIR / f"matrix-{label}"
                 if key_path.exists() or key_path.with_suffix(".pub").exists():
                     raise ValueError("Deze sleutel bestaat al; kies een andere naam")
-                result = subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-C", f"matrix-{label}", "-f", str(key_path)], input=f"{passphrase}\n{passphrase}\n", capture_output=True, text=True, timeout=15, check=False)
+                result = subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-C", f"matrix-{label}", "-f", str(key_path)], input=f"{passphrase}\n{passphrase}\n", capture_output=True, text=True, timeout=15)
                 if result.returncode != 0:
                     key_path.unlink(missing_ok=True)
                     key_path.with_suffix(".pub").unlink(missing_ok=True)
