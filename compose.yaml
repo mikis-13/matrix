@@ -1,0 +1,30 @@
+services:
+  matrix-control:
+    build: .
+    container_name: matrix-control
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - matrix-state:/home/matrix/.matrix-control
+      - matrix-ssh:/home/matrix/.ssh
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/', timeout=2)"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  matrix-state:
+  matrix-ssh:
