@@ -1,5 +1,69 @@
 # Matrix Control
 
+## Installatiehandleiding
+
+### Vereisten
+
+Voordat je de app start, controleer of je het volgende hebt:
+
+- Docker Engine
+- Docker Compose
+- Git
+- een lokale terminal of shell
+
+### 1. Repository clonen
+
+```sh
+git clone https://github.com/mikis-13/matrix.git
+cd matrix
+```
+
+### 2. Afhankelijkheden controleren
+
+Zorg ervoor dat Docker actief is op je machine:
+
+```sh
+docker --version
+docker compose version
+```
+
+Als deze commando's werken, kun je verder.
+
+### 3. Applicatie starten
+
+Start de app vanuit de repositorymap:
+
+```sh
+docker compose up -d --build
+```
+
+Na het opstarten ga je naar:
+
+```text
+http://localhost:8765
+```
+
+### 4. Applicatie stoppen
+
+```sh
+docker compose down
+```
+
+### 5. Data en volumes
+
+Bij een standaard start worden de volgende gegevens bewaard:
+
+- `matrix-state` voor taak- en configuratiestatus
+- `matrix-ssh` voor SSH-sleutels
+
+Deze volumes zorgen ervoor dat je taken en SSH-instellingen behouden blijven bij een nieuwe start.
+
+### 6. Opmerkingen voor Codespaces en Linux
+
+- Als je de app in GitHub Codespaces draait, draait Docker in de Codespace-omgeving en niet op je fysieke pc.
+- De app is bedoeld om lokaal te draaien op je eigen machine.
+- De app bindt alleen aan `127.0.0.1` en is niet beschikbaar voor externe machines.
+
 ## Lokaal starten met Docker
 
 Vereist Docker Engine en Docker Compose. Start vanuit de repositorymap:
@@ -14,13 +78,13 @@ Open daarna http://localhost:8765. De Compose-configuratie gebruikt Linux host n
 docker compose down
 ```
 
-Taken en SSH-sleutels blijven bewaard in Docker-volumes (`matrix-state` en `matrix-ssh`). De privésleutels zijn niet direct zichtbaar in de bestanden van de host. Bewaar geen wachtzinnen of privégegevens in de repository of in opgestelde configbestanden die door Docker worden gedeeld.
+Taken en SSH-sleutels blijven bewaard in Docker-volumes (`matrix-state` en `matrix-ssh`). De privésleutels zijn niet direct zichtbaar in de bestanden van de host. Bewaar geen wachtzinnen of privégegevens in de repository, en laat de app niet toegankelijk zijn buiten je lokale machine.
 
-De container draait als niet-root en krijgt geen Docker-socket. Daardoor kan de dashboard-app de Docker-engine van de host niet beheren; Docker-status kan vanuit de container als niet beschikbaar worden gemeld.
+De container draait als niet-root en krijgt geen Docker-socket. Daardoor kan de dashboard-app de Docker-engine van de host niet beheren; Docker-status kan vanuit de container als niet beschikbaar worden weergegeven.
 
-SSH-hostchecks en sleutelgeneratie draaien in de container. Voeg geen hosts toe tenzij je de verbinding vanaf deze container verwacht; sleutels staan in het `matrix-ssh`-volume en worden niet automatisch overgezet.
+SSH-hostchecks en sleutelgeneratie draaien in de container. Voeg geen hosts toe tenzij je de verbinding vanaf deze container verwacht; sleutels staan in het `matrix-ssh`-volume en worden niet automatisch gedeeld met je hostmachine.
 
-Als je dit vanuit GitHub Codespaces start, draait Docker in de Codespace-omgeving en niet rechtstreeks op je fysieke pc. Om het op je eigen Linux-computer te installeren, clone je de repository daarnet.
+Als je dit vanuit GitHub Codespaces start, draait Docker in de Codespace-omgeving en niet rechtstreeks op je fysieke pc. Om het op je eigen Linux-computer te installeren, clone je de repository daarna en voer je de bovenstaande installatie- en startstappen uit.
 
 <details>
   <summary>Belangrijk: beveiliging voor productie</summary>
@@ -40,7 +104,7 @@ Als je dit vanuit GitHub Codespaces start, draait Docker in de Codespace-omgevin
   <pre><code>POSTGRES_PASSWORD=&lt;sterke-unieke-waarde&gt;
 JWT_SECRET=&lt;sterke-random-waarde&gt;</code></pre>
 
-  <p>Gebruik een <code>.env</code>-bestand of een secrets manager (bijv. Docker secrets, GitHub Actions secrets, Vault, Doppler of Kubernetes Secrets) en zet dat bestand nooit in Git. Geef ook altijd een voorbeeldbestand mee, bijvoorbeeld <code>.env.example</code>, met placeholder-waarden in plaats van echte geheimen.</p>
+  <p>Gebruik een <code>.env</code>-bestand of een secrets manager (bijv. Docker secrets, GitHub Actions secrets, Vault, Doppler of Kubernetes Secrets) en zet dat bestand nooit in Git. Geef ook aandacht aan reguliere secret-rotatie en beperkte toegang.</p>
 
   <p>Voorbeeld:</p>
 
