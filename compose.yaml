@@ -1,59 +1,188 @@
-version: "3.9"
+name: matrix-production
 
 services:
+  traefik:
+    image: traefik:v3.2
+    container_name: matrix-traefik
+    restart: unless-stopped
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`${TRAEFIK_DASHBOARD_HOST}`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.middlewares=traefik-auth"
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}"
+
   api:
     build:
       context: ./api
+      dockerfile: Dockerfile
     container_name: matrix-api
-    ports:
-      - "8765:8765"
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql://matrix:matrix@postgres:5432/matrix
+      APP_ENV: production
+      DATABASE_URL: postgresql://matrix:${POSTGRES_PASSWORD}@postgres:5432/matrix
       REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: change-me-super-secret
+      JWT_SECRET: ${JWT_SECRET}
       JWT_ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "15"
       REFRESH_TOKEN_EXPIRE_DAYS: "7"
+      RBAC_ENABLED: "true"
+      MFA_REQUIRED: "true"
+      AUDIT_LOG_ENABLED: "true"
+      AUDIT_LOG_PATH: /var/log/matrix/audit.log
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     command: >
       sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8765"
-    restart: unless-stopped
+    expose:
+      - "8765"
+    volumes:
+      - matrix_logs:/var/log/matrix
+    networks:
+      - backend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.matrix-api.rule=Host(`${API_HOST}`)"
+      - "traefik.http.routers.matrix-api.entrypoints=websecure"
+      - "traefik.http.routers.matrix-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.matrix-api.loadbalancer.server.port=8765"
+      - "traefik.http.middlewares.matrix-api-security.headers.sslRedirect=true"
+      - "traefik.http.middlewares.matrix-api-security.headers.frameDeny=true"
+      - "traefik.http.middlewares.matrix-api-security.headers.browserXssFilter=true"
+      - "traefik.http.routers.matrix-api.middlewares=matrix-api-security"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
 
   worker:
     build:
       context: ./worker
+      dockerfile: Dockerfile
     container_name: matrix-worker
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      DATABASE_URL: postgresql://matrix:matrix@postgres:5432/matrix
+      DATABASE_URL: postgresql://matrix:${POSTGRES_PASSWORD}@postgres:5432/matrix
       REDIS_URL: redis://redis:6379/0
+      RBAC_ENABLED: "true"
+      MFA_REQUIRED: "true"
+      AUDIT_LOG_ENABLED: "true"
+      AUDIT_LOG_PATH: /var/log/matrix/audit.log
+      WORKER_CONCURRENCY: "4"
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     command: >
       sh -c "rq worker matrix --url ${REDIS_URL}"
-    restart: unless-stopped
+    volumes:
+      - matrix_logs:/var/log/matrix
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
 
   postgres:
     image: postgres:17-alpine
     container_name: matrix-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: matrix
       POSTGRES_USER: matrix
-      POSTGRES_PASSWORD: matrix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
+    expose:
+      - "5432"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matrix -d matrix"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
 
   redis:
     image: redis:7-alpine
     container_name: matrix-redis
-    ports:
-      - "6379:6379"
     restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--protected-mode", "yes"]
+    volumes:
+      - redis_data:/data
+    expose:
+      - "6379"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  backup:
+    image: prodrigestivill/postgres-backup-local:16
+    container_name: matrix-backup
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: matrix
+      POSTGRES_USER: matrix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 3
+      HEALTHCHECK_PORT: "8080"
+    volumes:
+      - backup_data:/backups
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres_data:
+  redis_data:
+  matrix_logs:
+  backup_data:
+
+networks:
+  backend:
+    driver: bridge
